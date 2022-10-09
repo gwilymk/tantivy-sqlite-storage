@@ -1,9 +1,14 @@
 [package]
 name = "tantivy-sqlite-storage"
+description = "Allows tantivy data to be stored in sqlite rather than files on disk"
+documentation = "https://docs.rs/tantivy-sqlite-storage"
+readme = "README.md"
+repository = "https://github.com/gwilymk/tantivy-sqlite-storage"
+licence = "MIT OR Apache-2.0"
+keywords = ["tantivy", "sqlite"]
 version = "0.1.0"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+authors = ["Gwilym Kuiper <email@gwilym.dev>"]
 
 [dependencies]
 tantivy = { version = "0.18", default_features = false }
