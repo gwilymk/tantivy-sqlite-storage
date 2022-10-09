@@ -5,9 +5,8 @@
 //! to spread it out over multiple places.
 //!
 //! Has a few disadvantages though. Because of sqlite's threading, it isn't possible
-//! to avoid reading a lot more into memory then we would like, and you can't write
-//! to a file while reading another. Only use this if you _really_ want to, because
-//! using the default storage systems is probably faster and more reliable.
+//! to io partial reads while allowing concurrent writes. So a lot of operations
+//! are ultimately serialised.
 //!
 //! All the data is stored in a table called `tantivy_blobs`. You should not interact
 //! with this table directly, and instead let tantivy manage that for you.
@@ -17,19 +16,26 @@
 //! You can use the library as follows:
 //!
 //! ```
+//! use tantivy::{Index, schema::Schema};
+//!
 //! use r2d2::Pool;
 //! use r2d2_sqlite::SqliteConnectionManager;
 //!
+//! use tantivy_sqlite_storage::TantivySqliteStorage;
+//!
 //! // Note that you have to use file here for in-memory, but you'll probably point this to a real sqlite database
 //! // if you were actually using it.
-//! let connection_manager = SqliteConnectionManager::file("file:tantivy-shared-file?mode=memory&cache=shared")?;
-//! let pool = Pool::builder().max_size(4).build(manager)?;
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let connection_manager = SqliteConnectionManager::file("file:tantivy-shared-file?mode=memory&cache=shared");
+//! let pool = Pool::builder().max_size(4).build(connection_manager)?;
 //! let storage = TantivySqliteStorage::new(pool)?;
 //!
 //! // build your schema
 //! # let mut schema_builder = Schema::builder();
 //! # let schema = schema_builder.build();
 //! let index = Index::open_or_create(storage, schema.clone())?;
+//! # Ok(())
+//! # }
 //! ```
 #![deny(
     missing_docs,
