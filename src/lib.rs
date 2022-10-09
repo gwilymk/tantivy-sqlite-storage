@@ -1,17 +1,20 @@
 use std::{
     fmt::Debug,
+    ops::Range,
     os::unix::prelude::OsStrExt,
     path::{Path, PathBuf},
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex, RwLock},
 };
 
-use r2d2::Pool;
+use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 
-use rusqlite::OptionalExtension;
+use rusqlite::{blob::Blob, DatabaseName, OptionalExtension};
 use tantivy::{
-    directory::{error, FileHandle, WatchCallback, WatchCallbackList, WatchHandle, WritePtr},
-    Directory,
+    directory::{
+        error, FileHandle, OwnedBytes, WatchCallback, WatchCallbackList, WatchHandle, WritePtr,
+    },
+    Directory, HasLen,
 };
 
 use thiserror::Error;
@@ -29,6 +32,32 @@ pub enum TantivySqliteStorageError {
 impl From<TantivySqliteStorageError> for std::io::Error {
     fn from(e: TantivySqliteStorageError) -> Self {
         std::io::Error::new(std::io::ErrorKind::Other, e)
+    }
+}
+
+impl TantivySqliteStorageError {
+    fn into_open_read_error(self, path: &Path) -> error::OpenReadError {
+        match self {
+            TantivySqliteStorageError::FileDoesNotExist(path) => {
+                error::OpenReadError::FileDoesNotExist(path)
+            }
+            _ => error::OpenReadError::IoError {
+                io_error: self.into(),
+                filepath: path.to_path_buf(),
+            },
+        }
+    }
+
+    fn into_delete_error(self, path: &Path) -> error::DeleteError {
+        match self {
+            TantivySqliteStorageError::FileDoesNotExist(path) => {
+                error::DeleteError::FileDoesNotExist(path)
+            }
+            _ => error::DeleteError::IoError {
+                io_error: self.into(),
+                filepath: path.to_path_buf(),
+            },
+        }
     }
 }
 
@@ -57,7 +86,16 @@ impl TantivySqliteStorage {
 
 impl Directory for TantivySqliteStorage {
     fn get_file_handle(&self, path: &Path) -> Result<Box<dyn FileHandle>, error::OpenReadError> {
-        todo!()
+        let blob = self
+            .inner
+            .read()
+            .unwrap()
+            .blob(path)
+            .map_err(|e| e.into_open_read_error(path))?;
+
+        Ok(Box::new(TantivySqliteStorageFileHandle {
+            blob: Mutex::new(blob),
+        }))
     }
 
     fn delete(&self, path: &Path) -> Result<(), error::DeleteError> {
@@ -65,15 +103,7 @@ impl Directory for TantivySqliteStorage {
             .write()
             .unwrap()
             .delete(path)
-            .map_err(|e| match e {
-                TantivySqliteStorageError::FileDoesNotExist(path) => {
-                    error::DeleteError::FileDoesNotExist(path)
-                }
-                _ => error::DeleteError::IoError {
-                    io_error: e.into(),
-                    filepath: path.to_path_buf(),
-                },
-            })
+            .map_err(|e| e.into_delete_error(path))
     }
 
     fn exists(&self, path: &Path) -> Result<bool, error::OpenReadError> {
@@ -96,15 +126,7 @@ impl Directory for TantivySqliteStorage {
             .read()
             .unwrap()
             .atomic_read(path)
-            .map_err(|e| match e {
-                TantivySqliteStorageError::FileDoesNotExist(path) => {
-                    error::OpenReadError::FileDoesNotExist(path)
-                }
-                _ => error::OpenReadError::IoError {
-                    io_error: e.into(),
-                    filepath: path.to_path_buf(),
-                },
-            })
+            .map_err(|e| e.into_open_read_error(path))
     }
 
     fn atomic_write(&self, path: &Path, data: &[u8]) -> std::io::Result<()> {
@@ -216,11 +238,96 @@ impl TantivySqliteStorageInner {
         content.ok_or_else(|| TantivySqliteStorageError::FileDoesNotExist(path.to_path_buf()))
     }
 
+    pub fn blob(&self, path: &Path) -> Result<StorageBlob, TantivySqliteStorageError> {
+        let conn = self.connection_pool.get()?;
+
+        let row_id: Option<(i64, usize)> = conn
+            .query_row(
+                "SELECT rowid, length(content) FROM tantivy_blobs WHERE filename = ?",
+                [path.as_os_str().as_bytes()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+
+        match row_id {
+            Some((row_id, length)) => Ok(StorageBlob {
+                conn,
+                row_id,
+                length,
+            }),
+            None => Err(TantivySqliteStorageError::FileDoesNotExist(
+                path.to_path_buf(),
+            )),
+        }
+    }
+
     fn init(&self) -> Result<(), TantivySqliteStorageError> {
         let conn = self.connection_pool.get()?;
 
         conn.execute_batch(INIT_SQL)?;
         Ok(())
+    }
+}
+
+struct StorageBlob {
+    conn: PooledConnection<SqliteConnectionManager>,
+    row_id: i64,
+    length: usize,
+}
+
+impl StorageBlob {
+    pub fn blob(&self) -> Result<Blob<'_>, TantivySqliteStorageError> {
+        Ok(self.conn.blob_open(
+            DatabaseName::Main,
+            "tantivy_blobs",
+            "content",
+            self.row_id,
+            true,
+        )?)
+    }
+
+    pub fn blob_mut(&mut self) -> Result<Blob<'_>, TantivySqliteStorageError> {
+        Ok(self.conn.blob_open(
+            DatabaseName::Main,
+            "tantivy_blobs",
+            "content",
+            self.row_id,
+            false,
+        )?)
+    }
+
+    pub fn length(&self) -> usize {
+        self.length
+    }
+}
+
+struct TantivySqliteStorageFileHandle {
+    blob: Mutex<StorageBlob>,
+}
+
+impl std::fmt::Debug for TantivySqliteStorageFileHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TantivySqliteStorageFileHandle")
+    }
+}
+
+impl HasLen for TantivySqliteStorageFileHandle {
+    fn len(&self) -> usize {
+        self.blob.lock().unwrap().length()
+    }
+}
+
+impl FileHandle for TantivySqliteStorageFileHandle {
+    fn read_bytes(&self, range: Range<usize>) -> std::io::Result<OwnedBytes> {
+        let mut buf = vec![0; range.len()];
+        self.blob
+            .lock()
+            .unwrap()
+            .blob()?
+            .read_at_exact(&mut buf, range.start)
+            .map_err(TantivySqliteStorageError::from)?;
+
+        Ok(OwnedBytes::new(buf))
     }
 }
 
@@ -334,6 +441,26 @@ mod test {
 
         storage.delete(path).unwrap();
         assert!(!storage.exists(path).unwrap());
+
+        Ok(())
+    }
+
+    #[test]
+    fn can_create_file_handles() -> Result<(), TantivySqliteStorageError> {
+        let manager = in_memory_connection_manager();
+        let pool = Pool::builder().max_size(4).build(manager)?;
+
+        let storage = TantivySqliteStorage::new(pool)?;
+
+        let data = b"hello, world!";
+        let path = Path::new("some/file/path.txt");
+        storage.atomic_write(path, data).unwrap();
+
+        let file_handle = storage.get_file_handle(path).unwrap();
+
+        let content = file_handle.read_bytes(3..7).unwrap();
+
+        assert_eq!(&*content, b"lo, ");
 
         Ok(())
     }
