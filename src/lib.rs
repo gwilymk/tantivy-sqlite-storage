@@ -77,7 +77,14 @@ impl Directory for TantivySqliteStorage {
     }
 
     fn exists(&self, path: &Path) -> Result<bool, error::OpenReadError> {
-        todo!()
+        self.inner
+            .read()
+            .unwrap()
+            .exists(path)
+            .map_err(|e| error::OpenReadError::IoError {
+                io_error: e.into(),
+                filepath: path.to_path_buf(),
+            })
     }
 
     fn open_write(&self, path: &Path) -> Result<WritePtr, error::OpenWriteError> {
@@ -143,6 +150,20 @@ impl TantivySqliteStorageInner {
 
     pub fn watch(&self, watch_callback: WatchCallback) -> WatchHandle {
         self.watch_callback_list.subscribe(watch_callback)
+    }
+
+    pub fn exists(&self, path: &Path) -> Result<bool, TantivySqliteStorageError> {
+        let conn = self.connection_pool.get()?;
+
+        let exists: Option<i32> = conn
+            .query_row(
+                "SELECT 1 FROM tantivy_blobs WHERE filename = ?",
+                [path.as_os_str().as_bytes()],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        Ok(exists.is_some())
     }
 
     pub fn delete(&mut self, path: &Path) -> Result<(), TantivySqliteStorageError> {
@@ -291,6 +312,28 @@ mod test {
 
         let error = storage.atomic_read(path).unwrap_err();
         assert!(matches!(error, error::OpenReadError::FileDoesNotExist(_)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn can_check_if_file_exists() -> Result<(), TantivySqliteStorageError> {
+        let manager = in_memory_connection_manager();
+        let pool = Pool::builder().max_size(4).build(manager)?;
+
+        let storage = TantivySqliteStorage::new(pool)?;
+
+        let path = Path::new("some/file/path.txt");
+
+        assert!(!storage.exists(path).unwrap());
+
+        let data = b"hello, world!";
+        storage.atomic_write(path, data).unwrap();
+
+        assert!(storage.exists(path).unwrap());
+
+        storage.delete(path).unwrap();
+        assert!(!storage.exists(path).unwrap());
 
         Ok(())
     }
