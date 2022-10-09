@@ -61,7 +61,19 @@ impl Directory for TantivySqliteStorage {
     }
 
     fn delete(&self, path: &Path) -> Result<(), error::DeleteError> {
-        todo!()
+        self.inner
+            .write()
+            .unwrap()
+            .delete(path)
+            .map_err(|e| match e {
+                TantivySqliteStorageError::FileDoesNotExist(path) => {
+                    error::DeleteError::FileDoesNotExist(path)
+                }
+                _ => error::DeleteError::IoError {
+                    io_error: e.into(),
+                    filepath: path.to_path_buf(),
+                },
+            })
     }
 
     fn exists(&self, path: &Path) -> Result<bool, error::OpenReadError> {
@@ -131,6 +143,23 @@ impl TantivySqliteStorageInner {
 
     pub fn watch(&self, watch_callback: WatchCallback) -> WatchHandle {
         self.watch_callback_list.subscribe(watch_callback)
+    }
+
+    pub fn delete(&mut self, path: &Path) -> Result<(), TantivySqliteStorageError> {
+        let conn = self.connection_pool.get()?;
+
+        let num_deleted = conn.execute(
+            "DELETE FROM tantivy_blobs WHERE filename = ?",
+            [path.as_os_str().as_bytes()],
+        )?;
+
+        if num_deleted == 0 {
+            return Err(TantivySqliteStorageError::FileDoesNotExist(
+                path.to_path_buf(),
+            ));
+        }
+
+        Ok(())
     }
 
     pub fn atomic_write(
@@ -227,6 +256,40 @@ mod test {
         let path = Path::new("some/file/path.txt");
         let error = storage.atomic_read(path).unwrap_err();
 
+        assert!(matches!(error, error::OpenReadError::FileDoesNotExist(_)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn error_to_delete_empty_files() -> Result<(), TantivySqliteStorageError> {
+        let manager = in_memory_connection_manager();
+        let pool = Pool::builder().max_size(4).build(manager)?;
+
+        let storage = TantivySqliteStorage::new(pool)?;
+
+        let path = Path::new("some/file/path.txt");
+        let error = storage.delete(path).unwrap_err();
+
+        assert!(matches!(error, error::DeleteError::FileDoesNotExist(_)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn can_delete_files() -> Result<(), TantivySqliteStorageError> {
+        let manager = in_memory_connection_manager();
+        let pool = Pool::builder().max_size(4).build(manager)?;
+
+        let storage = TantivySqliteStorage::new(pool)?;
+
+        let path = Path::new("some/file/path.txt");
+        let data = b"hello, world!";
+        storage.atomic_write(path, data).unwrap();
+
+        storage.delete(path).unwrap();
+
+        let error = storage.atomic_read(path).unwrap_err();
         assert!(matches!(error, error::OpenReadError::FileDoesNotExist(_)));
 
         Ok(())
