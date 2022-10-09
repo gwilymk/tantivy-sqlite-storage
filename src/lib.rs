@@ -1,3 +1,44 @@
+//! An implementation of a storage layer for tantivy which builds on sqlite.
+//!
+//! Allows you to put all your search index data into sqlite making it so that
+//! all the data is in one file rather than tantivy's default behaviour which is
+//! to spread it out over multiple places.
+//!
+//! Has a few disadvantages though. Because of sqlite's threading, it isn't possible
+//! to avoid reading a lot more into memory then we would like, and you can't write
+//! to a file while reading another. Only use this if you _really_ want to, because
+//! using the default storage systems is probably faster and more reliable.
+//!
+//! All the data is stored in a table called `tantivy_blobs`. You should not interact
+//! with this table directly, and instead let tantivy manage that for you.
+//!
+//! # Example
+//!
+//! You can use the library as follows:
+//!
+//! ```
+//! use r2d2::Pool;
+//! use r2d2_sqlite::SqliteConnectionManager;
+//!
+//! // Note that you have to use file here for in-memory, but you'll probably point this to a real sqlite database
+//! // if you were actually using it.
+//! let connection_manager = SqliteConnectionManager::file("file:tantivy-shared-file?mode=memory&cache=shared")?;
+//! let pool = Pool::builder().max_size(4).build(manager)?;
+//! let storage = TantivySqliteStorage::new(pool)?;
+//!
+//! // build your schema
+//! # let mut schema_builder = Schema::builder();
+//! # let schema = schema_builder.build();
+//! let index = Index::open_or_create(storage, schema.clone())?;
+//! ```
+#![deny(
+    missing_docs,
+    missing_debug_implementations,
+    unreachable_pub,
+    rustdoc::broken_intra_doc_links
+)]
+#![warn(rust_2018_idioms)]
+
 use std::{
     fmt::Debug,
     io::{BufWriter, Cursor, Write},
@@ -21,12 +62,16 @@ use tantivy::{
 
 use thiserror::Error;
 
+/// The possible errors produced by this library.
 #[derive(Error, Debug)]
 pub enum TantivySqliteStorageError {
+    /// An error directly from rusqlite
     #[error("Sqlite command failed")]
     Sqlite(#[from] rusqlite::Error),
+    /// An error directly from r2d2
     #[error("r2d2 pool error")]
     Pool(#[from] r2d2::Error),
+    /// A requested file doesn't exist
     #[error("File does not exist")]
     FileDoesNotExist(PathBuf),
 }
@@ -63,6 +108,7 @@ impl TantivySqliteStorageError {
     }
 }
 
+/// The main struct of this crate. This is an implementation of [`tantivy::Directory`].
 #[derive(Clone)]
 pub struct TantivySqliteStorage {
     inner: Arc<RwLock<TantivySqliteStorageInner>>,
@@ -75,6 +121,7 @@ impl Debug for TantivySqliteStorage {
 }
 
 impl TantivySqliteStorage {
+    /// Creates a new storage.
     pub fn new(
         connection_pool: Pool<SqliteConnectionManager>,
     ) -> Result<Self, TantivySqliteStorageError> {
@@ -155,7 +202,7 @@ struct TantivySqliteStorageInner {
 }
 
 impl TantivySqliteStorageInner {
-    pub fn new(
+    fn new(
         connection_pool: Pool<SqliteConnectionManager>,
     ) -> Result<Self, TantivySqliteStorageError> {
         let ret = Self {
@@ -167,11 +214,11 @@ impl TantivySqliteStorageInner {
         Ok(ret)
     }
 
-    pub fn watch(&self, watch_callback: WatchCallback) -> WatchHandle {
+    fn watch(&self, watch_callback: WatchCallback) -> WatchHandle {
         self.watch_callback_list.subscribe(watch_callback)
     }
 
-    pub fn exists(&self, path: &Path) -> Result<bool, TantivySqliteStorageError> {
+    fn exists(&self, path: &Path) -> Result<bool, TantivySqliteStorageError> {
         let conn = self.connection_pool.get()?;
 
         let exists: Option<i32> = conn
@@ -185,7 +232,7 @@ impl TantivySqliteStorageInner {
         Ok(exists.is_some())
     }
 
-    pub fn delete(&mut self, path: &Path) -> Result<(), TantivySqliteStorageError> {
+    fn delete(&mut self, path: &Path) -> Result<(), TantivySqliteStorageError> {
         let conn = self.connection_pool.get()?;
 
         let num_deleted = conn.execute(
@@ -202,11 +249,7 @@ impl TantivySqliteStorageInner {
         Ok(())
     }
 
-    pub fn atomic_write(
-        &mut self,
-        path: &Path,
-        data: &[u8],
-    ) -> Result<(), TantivySqliteStorageError> {
+    fn atomic_write(&mut self, path: &Path, data: &[u8]) -> Result<(), TantivySqliteStorageError> {
         let conn = self.connection_pool.get()?;
 
         conn.execute(
@@ -221,7 +264,7 @@ impl TantivySqliteStorageInner {
         Ok(())
     }
 
-    pub fn atomic_read(&self, path: &Path) -> Result<Vec<u8>, TantivySqliteStorageError> {
+    fn atomic_read(&self, path: &Path) -> Result<Vec<u8>, TantivySqliteStorageError> {
         let conn = self.connection_pool.get()?;
 
         let content = conn
@@ -248,7 +291,7 @@ struct TantivySqliteStorageFileHandle {
 }
 
 impl TantivySqliteStorageFileHandle {
-    pub fn new(content: Vec<u8>) -> Self {
+    fn new(content: Vec<u8>) -> Self {
         Self { content }
     }
 }
@@ -278,7 +321,7 @@ struct TantivySqliteStorageWritePtr {
 }
 
 impl TantivySqliteStorageWritePtr {
-    pub fn new(path: &Path, storage: TantivySqliteStorage) -> Self {
+    fn new(path: &Path, storage: TantivySqliteStorage) -> Self {
         Self {
             data: Cursor::new(Vec::new()),
             path: path.to_path_buf(),
