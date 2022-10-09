@@ -27,9 +27,7 @@ The resulting sqlite file was 3.5G in size.
 
 Normal file store using the default mmap file storage took 19m51.956s to generate the index, and the final index was 3.1G in size.
 
-However, the biggest difference can be found when searching.
-The example search term (`barak obama`) took 79055 microseconds using sqlite storage and 10 times less using file storage of 7782 microseconds.
-However, searching the same thing again reduces the time to be more in line with the mmap file storage.
+The example search term (`barak obama`) took 3794 microseconds using sqlite storage and similar time using the default file storage.
 
-Also, startup time is significantly slower with sqlite storage (takes a few seconds to load the index).
-But once it is loaded, performance is reasonable for a small number of users.
+However, startup time is significantly slower (about 8s on the same machine) with sqlite storage (takes a few seconds to load the index), and memory usage is much higher.
+But once it is loaded, performance is comparable (although memory usage much higher).
