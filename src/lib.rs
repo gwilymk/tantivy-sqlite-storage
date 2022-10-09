@@ -48,7 +48,6 @@
 use std::{
     fmt::Debug,
     io::{BufWriter, Cursor, Write},
-    ops::Range,
     os::unix::prelude::OsStrExt,
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
@@ -63,7 +62,7 @@ use tantivy::{
         error, FileHandle, OwnedBytes, TerminatingWrite, WatchCallback, WatchCallbackList,
         WatchHandle, WritePtr,
     },
-    Directory, HasLen,
+    Directory,
 };
 
 use thiserror::Error;
@@ -155,7 +154,7 @@ impl Directory for TantivySqliteStorage {
             .atomic_read(path)
             .map_err(|e| e.into_open_read_error(path))?;
 
-        Ok(Box::new(TantivySqliteStorageFileHandle::new(content)))
+        Ok(Box::new(OwnedBytes::new(content)))
     }
 
     fn delete(&self, path: &Path) -> Result<(), error::DeleteError> {
@@ -313,41 +312,6 @@ impl TantivySqliteStorageInner {
 
         conn.execute("CREATE TABLE IF NOT EXISTS tantivy_blobs (filename TEXT UNIQUE NOT NULL, content BLOB NOT NULL)", [])?;
         Ok(())
-    }
-}
-
-struct TantivySqliteStorageFileHandle {
-    content: Vec<u8>,
-}
-
-impl TantivySqliteStorageFileHandle {
-    fn new(content: Vec<u8>) -> Self {
-        Self { content }
-    }
-}
-
-impl std::fmt::Debug for TantivySqliteStorageFileHandle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "TantivySqliteStorageFileHandle")
-    }
-}
-
-impl HasLen for TantivySqliteStorageFileHandle {
-    fn len(&self) -> usize {
-        self.content.len()
-    }
-}
-
-impl FileHandle for TantivySqliteStorageFileHandle {
-    fn read_bytes(&self, range: Range<usize>) -> std::io::Result<OwnedBytes> {
-        println!(
-            "Read bytes (total is {} requesting {}..{} or {} bytes)",
-            self.content.len(),
-            range.start,
-            range.end,
-            range.len()
-        );
-        Ok(OwnedBytes::new(Vec::from(&self.content[range])))
     }
 }
 
