@@ -112,6 +112,13 @@ impl TantivySqliteStorageError {
             },
         }
     }
+
+    fn into_open_write_error(self, path: &Path) -> error::OpenWriteError {
+        error::OpenWriteError::IoError {
+            io_error: self.into(),
+            filepath: path.to_path_buf(),
+        }
+    }
 }
 
 /// The main struct of this crate. This is an implementation of [`tantivy::Directory`].
@@ -171,6 +178,12 @@ impl Directory for TantivySqliteStorage {
     }
 
     fn open_write(&self, path: &Path) -> Result<WritePtr, error::OpenWriteError> {
+        self.inner
+            .write()
+            .unwrap()
+            .create_empty_file(path)
+            .map_err(|e| e.into_open_write_error(path))?;
+
         Ok(BufWriter::new(Box::new(TantivySqliteStorageWritePtr::new(
             path,
             self.clone(),
@@ -255,6 +268,17 @@ impl TantivySqliteStorageInner {
         Ok(())
     }
 
+    fn create_empty_file(&mut self, path: &Path) -> Result<(), TantivySqliteStorageError> {
+        let conn = self.connection_pool.get()?;
+
+        conn.execute(
+            "INSERT OR IGNORE INTO tantivy_blobs VALUES (?, ?)",
+            [path.as_os_str().as_bytes(), b""],
+        )?;
+
+        Ok(())
+    }
+
     fn atomic_write(&mut self, path: &Path, data: &[u8]) -> Result<(), TantivySqliteStorageError> {
         let conn = self.connection_pool.get()?;
 
@@ -316,6 +340,13 @@ impl HasLen for TantivySqliteStorageFileHandle {
 
 impl FileHandle for TantivySqliteStorageFileHandle {
     fn read_bytes(&self, range: Range<usize>) -> std::io::Result<OwnedBytes> {
+        println!(
+            "Read bytes (total is {} requesting {}..{} or {} bytes)",
+            self.content.len(),
+            range.start,
+            range.end,
+            range.len()
+        );
         Ok(OwnedBytes::new(Vec::from(&self.content[range])))
     }
 }
@@ -483,6 +514,30 @@ mod test {
 
         assert_eq!(&*content, b"lo, ");
         assert_eq!(file_handle.len(), 13);
+
+        Ok(())
+    }
+
+    #[test]
+    fn creates_empty_file_if_writing() -> Result<(), Box<dyn std::error::Error>> {
+        let manager = in_memory_connection_manager();
+        let pool = Pool::builder().max_size(4).build(manager)?;
+
+        let storage = TantivySqliteStorage::new(pool)?;
+
+        let data = b"hello, world!";
+        let path = Path::new("some/file/path.txt");
+
+        let mut write_ptr = storage.open_write(path)?;
+
+        assert!(storage.exists(path)?);
+
+        write_ptr.write_all(data)?;
+        write_ptr.terminate()?;
+
+        let content = storage.atomic_read(path)?;
+
+        assert_eq!(&content, data);
 
         Ok(())
     }
