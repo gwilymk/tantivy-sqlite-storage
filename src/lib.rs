@@ -432,7 +432,7 @@ mod test {
     }
 
     #[test]
-    fn can_successfully_init() -> Result<(), TantivySqliteStorageError> {
+    fn can_successfully_init() -> Result<(), Box<dyn std::error::Error>> {
         let manager = in_memory_connection_manager();
 
         let pool = Pool::builder().max_size(4).build(manager)?;
@@ -443,7 +443,7 @@ mod test {
     }
 
     #[test]
-    fn can_read_and_write() -> Result<(), TantivySqliteStorageError> {
+    fn can_read_and_write() -> Result<(), Box<dyn std::error::Error>> {
         let manager = in_memory_connection_manager();
         let pool = Pool::builder().max_size(4).build(manager)?;
 
@@ -451,9 +451,9 @@ mod test {
 
         let data = b"hello, world!";
         let path = Path::new("some/file/path.txt");
-        storage.atomic_write(path, data).unwrap();
+        storage.atomic_write(path, data)?;
 
-        let content = storage.atomic_read(path).unwrap();
+        let content = storage.atomic_read(path)?;
 
         assert_eq!(content, data);
 
@@ -461,7 +461,7 @@ mod test {
     }
 
     #[test]
-    fn returns_error_if_file_does_not_exist() -> Result<(), TantivySqliteStorageError> {
+    fn returns_error_if_file_does_not_exist() -> Result<(), Box<dyn std::error::Error>> {
         let manager = in_memory_connection_manager();
         let pool = Pool::builder().max_size(4).build(manager)?;
 
@@ -476,7 +476,7 @@ mod test {
     }
 
     #[test]
-    fn error_to_delete_empty_files() -> Result<(), TantivySqliteStorageError> {
+    fn error_to_delete_empty_files() -> Result<(), Box<dyn std::error::Error>> {
         let manager = in_memory_connection_manager();
         let pool = Pool::builder().max_size(4).build(manager)?;
 
@@ -491,7 +491,7 @@ mod test {
     }
 
     #[test]
-    fn can_delete_files() -> Result<(), TantivySqliteStorageError> {
+    fn can_delete_files() -> Result<(), Box<dyn std::error::Error>> {
         let manager = in_memory_connection_manager();
         let pool = Pool::builder().max_size(4).build(manager)?;
 
@@ -499,9 +499,9 @@ mod test {
 
         let path = Path::new("some/file/path.txt");
         let data = b"hello, world!";
-        storage.atomic_write(path, data).unwrap();
+        storage.atomic_write(path, data)?;
 
-        storage.delete(path).unwrap();
+        storage.delete(path)?;
 
         let error = storage.atomic_read(path).unwrap_err();
         assert!(matches!(error, error::OpenReadError::FileDoesNotExist(_)));
@@ -510,7 +510,7 @@ mod test {
     }
 
     #[test]
-    fn can_check_if_file_exists() -> Result<(), TantivySqliteStorageError> {
+    fn can_check_if_file_exists() -> Result<(), Box<dyn std::error::Error>> {
         let manager = in_memory_connection_manager();
         let pool = Pool::builder().max_size(4).build(manager)?;
 
@@ -518,21 +518,21 @@ mod test {
 
         let path = Path::new("some/file/path.txt");
 
-        assert!(!storage.exists(path).unwrap());
+        assert!(!storage.exists(path)?);
 
         let data = b"hello, world!";
-        storage.atomic_write(path, data).unwrap();
+        storage.atomic_write(path, data)?;
 
-        assert!(storage.exists(path).unwrap());
+        assert!(storage.exists(path)?);
 
-        storage.delete(path).unwrap();
-        assert!(!storage.exists(path).unwrap());
+        storage.delete(path)?;
+        assert!(!storage.exists(path)?);
 
         Ok(())
     }
 
     #[test]
-    fn can_create_file_handles() -> Result<(), TantivySqliteStorageError> {
+    fn can_create_file_handles() -> Result<(), Box<dyn std::error::Error>> {
         let manager = in_memory_connection_manager();
         let pool = Pool::builder().max_size(4).build(manager)?;
 
@@ -540,11 +540,11 @@ mod test {
 
         let data = b"hello, world!";
         let path = Path::new("some/file/path.txt");
-        storage.atomic_write(path, data).unwrap();
+        storage.atomic_write(path, data)?;
 
-        let file_handle = storage.get_file_handle(path).unwrap();
+        let file_handle = storage.get_file_handle(path)?;
 
-        let content = file_handle.read_bytes(3..7).unwrap();
+        let content = file_handle.read_bytes(3..7)?;
 
         assert_eq!(&*content, b"lo, ");
         assert_eq!(file_handle.len(), 13);
