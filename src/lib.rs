@@ -286,16 +286,6 @@ impl StorageBlob {
         )?)
     }
 
-    pub fn blob_mut(&mut self) -> Result<Blob<'_>, TantivySqliteStorageError> {
-        Ok(self.conn.blob_open(
-            DatabaseName::Main,
-            "tantivy_blobs",
-            "content",
-            self.row_id,
-            false,
-        )?)
-    }
-
     pub fn length(&self) -> usize {
         self.length
     }
