@@ -6,8 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tantivy = "0.18"
-rusqlite = { version = "0.28" }
+tantivy = { version = "0.18", default_features = false }
+rusqlite = "0.28"
 r2d2_sqlite = "0.21"
 r2d2 = "0.8"
 thiserror = "1"
