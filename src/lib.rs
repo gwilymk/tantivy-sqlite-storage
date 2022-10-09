@@ -1,5 +1,6 @@
 use std::{
     fmt::Debug,
+    io::{BufWriter, Cursor, Write},
     ops::Range,
     os::unix::prelude::OsStrExt,
     path::{Path, PathBuf},
@@ -12,7 +13,8 @@ use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{blob::Blob, DatabaseName, OptionalExtension};
 use tantivy::{
     directory::{
-        error, FileHandle, OwnedBytes, WatchCallback, WatchCallbackList, WatchHandle, WritePtr,
+        error, FileHandle, OwnedBytes, TerminatingWrite, WatchCallback, WatchCallbackList,
+        WatchHandle, WritePtr,
     },
     Directory, HasLen,
 };
@@ -118,7 +120,10 @@ impl Directory for TantivySqliteStorage {
     }
 
     fn open_write(&self, path: &Path) -> Result<WritePtr, error::OpenWriteError> {
-        todo!()
+        Ok(BufWriter::new(Box::new(TantivySqliteStorageWritePtr::new(
+            path,
+            self.clone(),
+        ))))
     }
 
     fn atomic_read(&self, path: &Path) -> Result<Vec<u8>, error::OpenReadError> {
@@ -318,6 +323,38 @@ impl FileHandle for TantivySqliteStorageFileHandle {
             .map_err(TantivySqliteStorageError::from)?;
 
         Ok(OwnedBytes::new(buf))
+    }
+}
+
+struct TantivySqliteStorageWritePtr {
+    data: Cursor<Vec<u8>>,
+    path: PathBuf,
+    storage: TantivySqliteStorage,
+}
+
+impl TantivySqliteStorageWritePtr {
+    pub fn new(path: &Path, storage: TantivySqliteStorage) -> Self {
+        Self {
+            data: Cursor::new(Vec::new()),
+            path: path.to_path_buf(),
+            storage,
+        }
+    }
+}
+
+impl Write for TantivySqliteStorageWritePtr {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.data.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.storage.atomic_write(&self.path, self.data.get_ref())
+    }
+}
+
+impl TerminatingWrite for TantivySqliteStorageWritePtr {
+    fn terminate_ref(&mut self, _: tantivy::directory::AntiCallToken) -> std::io::Result<()> {
+        self.flush()
     }
 }
 
