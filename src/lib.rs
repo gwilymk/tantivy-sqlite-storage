@@ -220,7 +220,7 @@ impl TantivySqliteStorageInner {
             [path.as_os_str().as_bytes(), data],
         )?;
 
-        if path.ends_with("meta.json") {
+        if path == Path::new("meta.json") {
             self.watch_callback_list.broadcast();
         }
 
