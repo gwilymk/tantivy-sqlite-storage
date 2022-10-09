@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 tantivy = "0.18"
-rusqlite = { version = "0.28", features = ["blob"] }
+rusqlite = { version = "0.28" }
 r2d2_sqlite = "0.21"
 r2d2 = "0.8"
 thiserror = "1"
