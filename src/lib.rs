@@ -46,11 +46,12 @@
 #![warn(rust_2018_idioms)]
 
 use std::{
+    collections::HashMap,
     fmt::Debug,
     io::{BufWriter, Cursor, Write},
     os::unix::prelude::OsStrExt,
     path::{Path, PathBuf},
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex, RwLock, Weak},
 };
 
 use r2d2::Pool;
@@ -79,6 +80,9 @@ pub enum TantivySqliteStorageError {
     /// A requested file doesn't exist
     #[error("File does not exist")]
     FileDoesNotExist(PathBuf),
+    /// File already exists
+    #[error("File already exists")]
+    FileAlreadyExists(PathBuf),
 }
 
 impl From<TantivySqliteStorageError> for std::io::Error {
@@ -123,6 +127,7 @@ impl TantivySqliteStorageError {
 /// The main struct of this crate. This is an implementation of [`tantivy::Directory`].
 #[derive(Clone)]
 pub struct TantivySqliteStorage {
+    file_cache: Arc<RwLock<FileCache>>,
     inner: Arc<RwLock<TantivySqliteStorageInner>>,
 }
 
@@ -138,6 +143,7 @@ impl TantivySqliteStorage {
         connection_pool: Pool<SqliteConnectionManager>,
     ) -> Result<Self, TantivySqliteStorageError> {
         Ok(Self {
+            file_cache: Default::default(),
             inner: Arc::new(RwLock::new(TantivySqliteStorageInner::new(
                 connection_pool,
             )?)),
@@ -147,12 +153,18 @@ impl TantivySqliteStorage {
 
 impl Directory for TantivySqliteStorage {
     fn get_file_handle(&self, path: &Path) -> Result<Box<dyn FileHandle>, error::OpenReadError> {
+        if let Some(content) = self.file_cache.read().unwrap().get(path) {
+            return Ok(Box::new(OwnedBytes::new(content)));
+        }
+
         let content = self
             .inner
             .read()
             .unwrap()
             .atomic_read(path)
             .map_err(|e| e.into_open_read_error(path))?;
+
+        let content = self.file_cache.write().unwrap().store(path, content);
 
         Ok(Box::new(OwnedBytes::new(content)))
     }
@@ -206,7 +218,7 @@ impl Directory for TantivySqliteStorage {
     }
 
     fn sync_directory(&self) -> std::io::Result<()> {
-        Ok(()) // managed by sqlite
+        Ok(())
     }
 
     fn watch(&self, watch_callback: WatchCallback) -> tantivy::Result<WatchHandle> {
@@ -270,12 +282,18 @@ impl TantivySqliteStorageInner {
     fn create_empty_file(&mut self, path: &Path) -> Result<(), TantivySqliteStorageError> {
         let conn = self.connection_pool.get()?;
 
-        conn.execute(
+        let num_rows_modified = conn.execute(
             "INSERT OR IGNORE INTO tantivy_blobs VALUES (?, ?)",
             [path.as_os_str().as_bytes(), b""],
         )?;
 
-        Ok(())
+        if num_rows_modified != 1 {
+            Err(TantivySqliteStorageError::FileAlreadyExists(
+                path.to_path_buf(),
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     fn atomic_write(&mut self, path: &Path, data: &[u8]) -> Result<(), TantivySqliteStorageError> {
@@ -344,6 +362,32 @@ impl Write for TantivySqliteStorageWritePtr {
 impl TerminatingWrite for TantivySqliteStorageWritePtr {
     fn terminate_ref(&mut self, _: tantivy::directory::AntiCallToken) -> std::io::Result<()> {
         self.flush()
+    }
+}
+
+#[derive(Default)]
+struct FileCache {
+    cache: HashMap<PathBuf, Weak<[u8]>>,
+}
+
+impl FileCache {
+    fn get(&self, path: &Path) -> Option<Arc<[u8]>> {
+        if let Some(file) = self.cache.get(path) {
+            if let Some(upgraded) = file.upgrade() {
+                return Some(upgraded);
+            }
+        }
+
+        None
+    }
+
+    fn store(&mut self, path: &Path, value: Vec<u8>) -> Arc<[u8]> {
+        let ret = value.into();
+
+        let to_store = Arc::downgrade(&ret);
+        self.cache.insert(path.to_path_buf(), to_store);
+
+        ret
     }
 }
 
