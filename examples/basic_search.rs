@@ -31,12 +31,12 @@ fn in_memory_connection_manager() -> SqliteConnectionManager {
     SqliteConnectionManager::file(create_in_memory_database_string())
 }
 
-fn main() -> tantivy::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Let's create an in-memory database
     let manager = in_memory_connection_manager();
-    let pool = Pool::builder().max_size(4).build(manager).unwrap();
+    let pool = Pool::builder().max_size(4).build(manager)?;
 
-    let storage = TantivySqliteStorage::new(pool).unwrap();
+    let storage = TantivySqliteStorage::new(pool)?;
 
     // # Defining the schema
     //
