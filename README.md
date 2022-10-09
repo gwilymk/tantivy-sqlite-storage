@@ -25,7 +25,7 @@ Terrible benchmarks to follow.
 On my machine (steam deck) took 22m3.238s to index wikipedia using tantivy-cli using this storage (not including the document content).
 The resulting sqlite file was 3.5G in size.
 
-Normal file store using the default mmap file storage took 19m51.956s to generate the index.
+Normal file store using the default mmap file storage took 19m51.956s to generate the index, and the final index was 3.1G in size.
 
 However, the biggest difference can be found when searching.
 The example search term (`barak obama`) took 79055 microseconds using sqlite storage and 10 times less using file storage of 7782 microseconds.
