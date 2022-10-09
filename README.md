@@ -6,6 +6,8 @@ Or wanted to use store your index along with the data it is indexing in one file
 Tantivy sqlite storage puts all of tantivy's files in one sqlite archive and massively reduces performance.
 But it does allow for easy backup and restore (via the backup API), live sychronisation to an external server (via something like litestream) or just easier distribution (e.g. save file in an application).
 
+I haven't tried it with smaller samples, but I imagine that this would work perfectly provided the number of documents you're working with isn't measured in millions.
+
 # Example
 
 See the `basic_search` example in the `examples` directory for an idea of how to use the library. Or the
@@ -27,7 +29,6 @@ The resulting sqlite file was 3.5G in size.
 
 Normal file store using the default mmap file storage took 19m51.956s to generate the index, and the final index was 3.1G in size.
 
-The example search term (`barak obama`) took 3794 microseconds using sqlite storage and similar time using the default file storage.
+The example search term (`barak obama`) took around 3000 microseconds to run (0.003 seconds) using the mmap store, but using this store is 2 orders of magnitude slower (around 0.3 seconds).
 
-However, startup time is significantly slower (about 8s on the same machine) with sqlite storage (takes a few seconds to load the index), and memory usage is much higher.
-But once it is loaded, performance is comparable (although memory usage much higher).
+Also, startup time is significantly slower (about 8s on the same machine) with sqlite storage, compared to mmap which takes microseconds to start up.
