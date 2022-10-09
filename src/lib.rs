@@ -451,6 +451,7 @@ mod test {
         let content = file_handle.read_bytes(3..7).unwrap();
 
         assert_eq!(&*content, b"lo, ");
+        assert_eq!(file_handle.len(), 13);
 
         Ok(())
     }
