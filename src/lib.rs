@@ -51,13 +51,14 @@ use std::{
     io::{BufWriter, Cursor, Write},
     os::unix::prelude::OsStrExt,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, RwLock, Weak},
+    sync::{Arc, Weak},
 };
 
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 
 use rusqlite::OptionalExtension;
+
 use tantivy::{
     directory::{
         error, FileHandle, OwnedBytes, TerminatingWrite, WatchCallback, WatchCallbackList,
@@ -67,6 +68,8 @@ use tantivy::{
 };
 
 use thiserror::Error;
+
+use parking_lot::RwLock;
 
 /// The possible errors produced by this library.
 #[derive(Error, Debug)]
@@ -153,18 +156,17 @@ impl TantivySqliteStorage {
 
 impl Directory for TantivySqliteStorage {
     fn get_file_handle(&self, path: &Path) -> Result<Box<dyn FileHandle>, error::OpenReadError> {
-        if let Some(content) = self.file_cache.read().unwrap().get(path) {
+        if let Some(content) = self.file_cache.read().get(path) {
             return Ok(Box::new(OwnedBytes::new(content)));
         }
 
         let content = self
             .inner
             .read()
-            .unwrap()
             .atomic_read(path)
             .map_err(|e| e.into_open_read_error(path))?;
 
-        let content = self.file_cache.write().unwrap().store(path, content);
+        let content = self.file_cache.write().store(path, content);
 
         Ok(Box::new(OwnedBytes::new(content)))
     }
@@ -172,7 +174,6 @@ impl Directory for TantivySqliteStorage {
     fn delete(&self, path: &Path) -> Result<(), error::DeleteError> {
         self.inner
             .write()
-            .unwrap()
             .delete(path)
             .map_err(|e| e.into_delete_error(path))
     }
@@ -180,7 +181,6 @@ impl Directory for TantivySqliteStorage {
     fn exists(&self, path: &Path) -> Result<bool, error::OpenReadError> {
         self.inner
             .read()
-            .unwrap()
             .exists(path)
             .map_err(|e| error::OpenReadError::IoError {
                 io_error: e.into(),
@@ -191,7 +191,6 @@ impl Directory for TantivySqliteStorage {
     fn open_write(&self, path: &Path) -> Result<WritePtr, error::OpenWriteError> {
         self.inner
             .write()
-            .unwrap()
             .create_empty_file(path)
             .map_err(|e| e.into_open_write_error(path))?;
 
@@ -204,7 +203,6 @@ impl Directory for TantivySqliteStorage {
     fn atomic_read(&self, path: &Path) -> Result<Vec<u8>, error::OpenReadError> {
         self.inner
             .read()
-            .unwrap()
             .atomic_read(path)
             .map_err(|e| e.into_open_read_error(path))
     }
@@ -212,7 +210,6 @@ impl Directory for TantivySqliteStorage {
     fn atomic_write(&self, path: &Path, data: &[u8]) -> std::io::Result<()> {
         self.inner
             .write()
-            .unwrap()
             .atomic_write(path, data)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
     }
@@ -222,7 +219,7 @@ impl Directory for TantivySqliteStorage {
     }
 
     fn watch(&self, watch_callback: WatchCallback) -> tantivy::Result<WatchHandle> {
-        Ok(self.inner.read().unwrap().watch(watch_callback))
+        Ok(self.inner.read().watch(watch_callback))
     }
 }
 

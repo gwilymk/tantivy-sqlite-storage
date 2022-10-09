@@ -16,6 +16,7 @@ rusqlite = "0.28"
 r2d2_sqlite = "0.21"
 r2d2 = "0.8"
 thiserror = "1"
+parking_lot = "0.12"
 
 [dev-dependencies]
 uuid = { version = "1.0", features = ["v4", "fast-rng"] }
