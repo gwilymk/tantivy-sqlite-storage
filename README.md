@@ -17,3 +17,19 @@ It is actually very simple.
 Tantivy allows for overriding the storage layer with your own one.
 Tantivy sqlite storage creates a single table, `tantivy-blobs`, and stores whatever tantivy wanted to store in there.
 The table stores file name and content, and nothing else, so you can easily incorporate this with your own sqlite file elsewhere in your application.
+
+# Benchmarks
+
+Terrible benchmarks to follow.
+
+On my machine (steam deck) took 22m3.238s to index wikipedia using tantivy-cli using this storage (not including the document content).
+The resulting sqlite file was 3.5G in size.
+
+Normal file store using the default mmap file storage took 19m51.956s to generate the index.
+
+However, the biggest difference can be found when searching.
+The example search term (`barak obama`) took 79055 microseconds using sqlite storage and 10 times less using file storage of 7782 microseconds.
+However, searching the same thing again reduces the time to be more in line with the mmap file storage.
+
+Also, startup time is significantly slower with sqlite storage (takes a few seconds to load the index).
+But once it is loaded, performance is reasonable for a small number of users.
