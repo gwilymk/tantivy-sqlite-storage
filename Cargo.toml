@@ -12,7 +12,7 @@ authors = ["Gwilym Kuiper <email@gwilym.dev>"]
 
 [dependencies]
 tantivy = { version = "0.18", default_features = false }
-rusqlite = "0.28"
+rusqlite = { version = "0.28", features = ["blob"] }
 r2d2_sqlite = "0.21"
 r2d2 = "0.8"
 thiserror = "1"
