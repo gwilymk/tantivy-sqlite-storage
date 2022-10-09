@@ -154,12 +154,6 @@ struct TantivySqliteStorageInner {
     watch_callback_list: WatchCallbackList,
 }
 
-const INIT_SQL: &str = "
-BEGIN;
-CREATE TABLE IF NOT EXISTS tantivy_blobs (filename TEXT UNIQUE NOT NULL, content BLOB NOT NULL);
-COMMIT;
-";
-
 impl TantivySqliteStorageInner {
     pub fn new(
         connection_pool: Pool<SqliteConnectionManager>,
@@ -244,7 +238,7 @@ impl TantivySqliteStorageInner {
     fn init(&self) -> Result<(), TantivySqliteStorageError> {
         let conn = self.connection_pool.get()?;
 
-        conn.execute_batch(INIT_SQL)?;
+        conn.execute("CREATE TABLE IF NOT EXISTS tantivy_blobs (filename TEXT UNIQUE NOT NULL, content BLOB NOT NULL)", [])?;
         Ok(())
     }
 }
