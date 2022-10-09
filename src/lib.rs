@@ -1,5 +1,6 @@
 use std::{
     fmt::Debug,
+    os::unix::prelude::OsStrExt,
     path::Path,
     sync::{Arc, RwLock},
 };
@@ -8,12 +9,19 @@ use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 
 use tantivy::{
-    directory::{error, FileHandle, WatchCallback, WatchHandle, WritePtr},
+    directory::{error, FileHandle, WatchCallback, WatchCallbackList, WatchHandle, WritePtr},
     Directory,
 };
 
-#[derive(Debug)]
-pub struct InitialisationError;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum TantivySqliteStorageError {
+    #[error("Sqlite command failed")]
+    Sqlite(#[from] rusqlite::Error),
+    #[error("r2d2 pool error")]
+    Pool(#[from] r2d2::Error),
+}
 
 #[derive(Clone)]
 pub struct TantivySqliteStorage {
@@ -29,7 +37,7 @@ impl Debug for TantivySqliteStorage {
 impl TantivySqliteStorage {
     pub fn new(
         connection_pool: Pool<SqliteConnectionManager>,
-    ) -> Result<Self, InitialisationError> {
+    ) -> Result<Self, TantivySqliteStorageError> {
         Ok(Self {
             inner: Arc::new(RwLock::new(TantivySqliteStorageInner::new(
                 connection_pool,
@@ -60,20 +68,25 @@ impl Directory for TantivySqliteStorage {
     }
 
     fn atomic_write(&self, path: &Path, data: &[u8]) -> std::io::Result<()> {
-        todo!()
+        self.inner
+            .write()
+            .unwrap()
+            .atomic_write(path, data)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
     }
 
     fn sync_directory(&self) -> std::io::Result<()> {
-        todo!()
+        Ok(()) // managed by sqlite
     }
 
     fn watch(&self, watch_callback: WatchCallback) -> tantivy::Result<WatchHandle> {
-        todo!()
+        Ok(self.inner.read().unwrap().watch(watch_callback))
     }
 }
 
 struct TantivySqliteStorageInner {
     connection_pool: Pool<SqliteConnectionManager>,
+    watch_callback_list: WatchCallbackList,
 }
 
 const INIT_SQL: &str = "
@@ -85,21 +98,43 @@ COMMIT;
 impl TantivySqliteStorageInner {
     pub fn new(
         connection_pool: Pool<SqliteConnectionManager>,
-    ) -> Result<Self, InitialisationError> {
-        let ret = Self { connection_pool };
+    ) -> Result<Self, TantivySqliteStorageError> {
+        let ret = Self {
+            connection_pool,
+            watch_callback_list: Default::default(),
+        };
 
         ret.init()?;
         Ok(ret)
     }
 
-    fn init(&self) -> Result<(), InitialisationError> {
-        let conn = self
-            .connection_pool
-            .get()
-            .map_err(|_| InitialisationError)?;
+    pub fn watch(&self, watch_callback: WatchCallback) -> WatchHandle {
+        self.watch_callback_list.subscribe(watch_callback)
+    }
 
-        conn.execute_batch(INIT_SQL)
-            .map_err(|_| InitialisationError)?;
+    pub fn atomic_write(
+        &mut self,
+        path: &Path,
+        data: &[u8],
+    ) -> Result<(), TantivySqliteStorageError> {
+        let conn = self.connection_pool.get()?;
+
+        conn.execute(
+            "INSERT OR REPLACE INTO tantivy_blobs VALUES (?, ?)",
+            [path.as_os_str().as_bytes(), data],
+        )?;
+
+        if path.ends_with("meta.json") {
+            self.watch_callback_list.broadcast();
+        }
+
+        Ok(())
+    }
+
+    fn init(&self) -> Result<(), TantivySqliteStorageError> {
+        let conn = self.connection_pool.get()?;
+
+        conn.execute_batch(INIT_SQL)?;
         Ok(())
     }
 }
@@ -119,7 +154,7 @@ mod test {
     }
 
     #[test]
-    fn can_successfully_init() -> Result<(), InitialisationError> {
+    fn can_successfully_init() -> Result<(), TantivySqliteStorageError> {
         let manager = in_memory_connection_manager();
 
         let pool = Pool::builder().max_size(4).build(manager).unwrap();
