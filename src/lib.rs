@@ -1,13 +1,14 @@
 use std::{
     fmt::Debug,
     os::unix::prelude::OsStrExt,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, RwLock},
 };
 
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 
+use rusqlite::OptionalExtension;
 use tantivy::{
     directory::{error, FileHandle, WatchCallback, WatchCallbackList, WatchHandle, WritePtr},
     Directory,
@@ -21,6 +22,14 @@ pub enum TantivySqliteStorageError {
     Sqlite(#[from] rusqlite::Error),
     #[error("r2d2 pool error")]
     Pool(#[from] r2d2::Error),
+    #[error("File does not exist")]
+    FileDoesNotExist(PathBuf),
+}
+
+impl From<TantivySqliteStorageError> for std::io::Error {
+    fn from(e: TantivySqliteStorageError) -> Self {
+        std::io::Error::new(std::io::ErrorKind::Other, e)
+    }
 }
 
 #[derive(Clone)]
@@ -64,7 +73,19 @@ impl Directory for TantivySqliteStorage {
     }
 
     fn atomic_read(&self, path: &Path) -> Result<Vec<u8>, error::OpenReadError> {
-        todo!()
+        self.inner
+            .read()
+            .unwrap()
+            .atomic_read(path)
+            .map_err(|e| match e {
+                TantivySqliteStorageError::FileDoesNotExist(path) => {
+                    error::OpenReadError::FileDoesNotExist(path)
+                }
+                _ => error::OpenReadError::IoError {
+                    io_error: e.into(),
+                    filepath: path.to_path_buf(),
+                },
+            })
     }
 
     fn atomic_write(&self, path: &Path, data: &[u8]) -> std::io::Result<()> {
@@ -131,6 +152,20 @@ impl TantivySqliteStorageInner {
         Ok(())
     }
 
+    pub fn atomic_read(&self, path: &Path) -> Result<Vec<u8>, TantivySqliteStorageError> {
+        let conn = self.connection_pool.get()?;
+
+        let content = conn
+            .query_row(
+                "SELECT content FROM tantivy_blobs WHERE filename = ?",
+                [path.as_os_str().as_bytes()],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        content.ok_or_else(|| TantivySqliteStorageError::FileDoesNotExist(path.to_path_buf()))
+    }
+
     fn init(&self) -> Result<(), TantivySqliteStorageError> {
         let conn = self.connection_pool.get()?;
 
@@ -157,9 +192,42 @@ mod test {
     fn can_successfully_init() -> Result<(), TantivySqliteStorageError> {
         let manager = in_memory_connection_manager();
 
-        let pool = Pool::builder().max_size(4).build(manager).unwrap();
+        let pool = Pool::builder().max_size(4).build(manager)?;
 
         let _storage = TantivySqliteStorage::new(pool)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn can_read_and_write() -> Result<(), TantivySqliteStorageError> {
+        let manager = in_memory_connection_manager();
+        let pool = Pool::builder().max_size(4).build(manager)?;
+
+        let storage = TantivySqliteStorage::new(pool)?;
+
+        let data = b"hello, world!";
+        let path = Path::new("some/file/path.txt");
+        storage.atomic_write(path, data).unwrap();
+
+        let content = storage.atomic_read(path).unwrap();
+
+        assert_eq!(content, data);
+
+        Ok(())
+    }
+
+    #[test]
+    fn returns_error_if_file_does_not_exist() -> Result<(), TantivySqliteStorageError> {
+        let manager = in_memory_connection_manager();
+        let pool = Pool::builder().max_size(4).build(manager)?;
+
+        let storage = TantivySqliteStorage::new(pool)?;
+
+        let path = Path::new("some/file/path.txt");
+        let error = storage.atomic_read(path).unwrap_err();
+
+        assert!(matches!(error, error::OpenReadError::FileDoesNotExist(_)));
 
         Ok(())
     }
